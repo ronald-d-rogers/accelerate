@@ -841,6 +841,7 @@ def deepspeed_launcher(args):
         from deepspeed.launcher.runner import DEEPSPEED_ENVIRONMENT_NAME
 
     cmd, current_env = prepare_deepspeed_cmd_env(args)
+
     if not check_cuda_p2p_ib_support():
         message = "Using RTX 4000 series which doesn't support faster communication speedups. Ensuring P2P and IB communications are disabled."
         warn = False
