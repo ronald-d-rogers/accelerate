@@ -49,8 +49,6 @@ def convert_dict_to_env_variables(current_env: dict):
     forbidden_chars = [";", "\n", "<", ">", " "]
     valid_env_items = []
     for key, value in current_env.items():
-        if isinstance(value, bool):
-            value = str(int(value))
         if all(char not in (key + value) for char in forbidden_chars) and len(key) >= 1 and len(value) >= 1:
             valid_env_items.append(f"{key}={value}\n")
         else:
