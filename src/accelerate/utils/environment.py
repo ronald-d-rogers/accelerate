@@ -46,11 +46,10 @@ def convert_dict_to_env_variables(current_env: dict):
     ["ACCELERATE_DEBUG_MODE=1\n", "OTHER_ENV=2\n"]
     ```
     """
-    print("Verifying environment variables", current_env)
     forbidden_chars = [";", "\n", "<", ">", " "]
     valid_env_items = []
     for key, value in current_env.items():
-        print("Checking key with value", key, value)
+        value = str(value)
         if all(char not in (key + value) for char in forbidden_chars) and len(key) >= 1 and len(value) >= 1:
             valid_env_items.append(f"{key}={value}\n")
         else:
