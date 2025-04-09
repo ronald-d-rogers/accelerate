@@ -14,7 +14,6 @@
 
 import contextlib
 import gc
-import importlib
 import inspect
 import json
 import logging
@@ -46,7 +45,7 @@ from .imports import (
 from .memory import clear_device_cache, get_xpu_available_memory
 from .offload import load_offloaded_weight, offload_weight, save_offload_index
 from .tqdm import is_tqdm_available, tqdm
-from .versions import compare_versions, is_torch_version
+from .versions import is_torch_version
 
 
 if is_npu_available(check_device=False):
@@ -358,19 +357,7 @@ def set_module_tensor_to_device(
             elif param_cls.__name__ in ["QTensor", "QBitsTensor"]:
                 new_value = torch.nn.Parameter(new_value, requires_grad=old_value.requires_grad).to(device)
             elif param_cls.__name__ in ["AffineQuantizedTensor"]:
-                if importlib.util.find_spec("torchao") is not None and compare_versions("torchao", ">=", "0.7.0"):
-                    # TorchAO v0.7.0 made layout_tensor an internal private variable and exposed tensor_impl
-                    args = (new_value.tensor_impl,)
-                else:
-                    args = (new_value.layout_tensor,)
-                args += (
-                    new_value.block_size,
-                    new_value.shape,
-                    new_value.quant_min,
-                    new_value.quant_max,
-                    new_value.zero_point_domain,
-                )
-                new_value = torch.nn.Parameter(param_cls(*args), requires_grad=old_value.requires_grad).to(device)
+                new_value = new_value.to(device)
             else:
                 new_value = param_cls(new_value, requires_grad=old_value.requires_grad).to(device)
 
@@ -506,18 +493,26 @@ def check_tied_parameters_in_config(model: nn.Module):
     has_tied_module = False
 
     if "PreTrainedModel" in [c.__name__ for c in inspect.getmro(model.__class__)]:
+        has_tied_word_embedding = False
+        model_decoder_config = None
+        if hasattr(model, "config"):
+            model_decoder_config = (
+                model.config.get_text_config(decoder=True)
+                if hasattr(model.config, "get_text_config")
+                else model.config
+            )
         has_tied_word_embedding = (
-            hasattr(model, "config")
-            and getattr(model.config, "tie_word_embeddings", False)
+            model_decoder_config is not None
+            and getattr(model_decoder_config, "tie_word_embeddings", False)
             and model.get_output_embeddings()
         )
+
         has_tied_encoder_decoder = (
             hasattr(model, "config")
             and getattr(model.config, "is_encoder_decoder", False)
             and getattr(model.config, "tie_encoder_decoder", False)
         )
         has_tied_module = any(hasattr(module, "_tie_weights") for module in model.modules())
-
     return any([has_tied_word_embedding, has_tied_encoder_decoder, has_tied_module])
 
 
@@ -1109,7 +1104,6 @@ def _init_infer_auto_device_map(
 
     module_sizes = compute_module_sizes(model, dtype=dtype, special_dtypes=special_dtypes)
     tied_parameters = find_tied_parameters(model)
-
     if check_tied_parameters_in_config(model) and len(tied_parameters) == 0:
         logger.warn(
             "The model weights are not tied. Please use the `tie_weights` method before using the `infer_auto_device` function."
