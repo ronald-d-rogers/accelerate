@@ -2029,8 +2029,6 @@ class Accelerator:
 
             engine, optimizer, _, lr_scheduler = ds_initialize(**kwargs)
 
-            deepspeed_plugin.set_sequence_parallel()
-
             if compare_versions("deepspeed", ">=", "0.14.4") and self.state.dynamo_plugin.backend != DynamoBackend.NO:
                 compile_kwargs = self.state.dynamo_plugin.to_kwargs()
                 engine.compile(backend=compile_kwargs.pop("backend"), compile_kwargs=compile_kwargs)

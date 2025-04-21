@@ -1367,20 +1367,11 @@ class DeepSpeedPlugin:
         unset_hf_deepspeed_config()
         self.dschf = HfDeepSpeedConfig(ds_config)  # keep this object alive # noqa
 
-    def set_sequence_parallel(self):
-        from deepspeed.utils import groups as deepspeed_groups
-
-        self._sequence_parallel_rank = deepspeed_groups._get_sequence_parallel_rank()
-
     def is_zero3_init_enabled(self):
         return self.zero3_init_flag
 
     def is_sequence_parallel_enabled(self):
         return self.sequence_parallel_size is not None and self.sequence_parallel_size > 1
-
-    @property
-    def sequence_parallel_rank(self):
-        return self._sequence_parallel_rank
 
     @contextmanager
     def zero3_init_context_manager(self, enable=False):
