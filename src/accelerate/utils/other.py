@@ -17,9 +17,9 @@ import platform
 import re
 import socket
 from codecs import encode
+from collections import OrderedDict
 from functools import partial, reduce
 from types import MethodType
-from typing import OrderedDict
 
 import numpy as np
 import torch
@@ -54,12 +54,14 @@ def is_compiled_module(module):
     """
     Check whether the module was compiled with torch.compile()
     """
-    if is_torch_version("<", "2.0.0") or not hasattr(torch, "_dynamo"):
+    if not hasattr(torch, "_dynamo"):
         return False
     return isinstance(module, torch._dynamo.eval_frame.OptimizedModule)
 
 
-def extract_model_from_parallel(model, keep_fp32_wrapper: bool = True, recursive: bool = False):
+def extract_model_from_parallel(
+    model, keep_fp32_wrapper: bool = True, keep_torch_compile: bool = True, recursive: bool = False
+):
     """
     Extract a model from its distributed containers.
 
@@ -68,6 +70,8 @@ def extract_model_from_parallel(model, keep_fp32_wrapper: bool = True, recursive
             The model to extract.
         keep_fp32_wrapper (`bool`, *optional*):
             Whether to remove mixed precision hooks from the model.
+        keep_torch_compile (`bool`, *optional*):
+            Whether to unwrap compiled model.
         recursive (`bool`, *optional*, defaults to `False`):
             Whether to recursively extract all cases of `module.module` from `model` as well as unwrap child sublayers
             recursively, not just the top-level distributed containers.
@@ -124,7 +128,7 @@ def extract_model_from_parallel(model, keep_fp32_wrapper: bool = True, recursive
         if getattr(model, "_converted_to_transformer_engine", False):
             convert_model(model, to_transformer_engine=False)
 
-    if is_compiled:
+    if keep_torch_compile and is_compiled:
         compiled_model._orig_mod = model
         model = compiled_model
 
@@ -346,3 +350,24 @@ def recursive_getattr(obj, attr: str):
         return getattr(obj, attr)
 
     return reduce(_getattr, [obj] + attr.split("."))
+
+
+def get_module_children_bottom_up(model: torch.nn.Module) -> list[torch.nn.Module]:
+    """Traverse the model in bottom-up order and return the children modules in that order.
+
+    Args:
+        model (`torch.nn.Module`): the model to get the children of
+
+    Returns:
+        `list[torch.nn.Module]`: a list of children modules of `model` in bottom-up order. The last element is the
+        `model` itself.
+    """
+    stack = [model]
+    ordered_modules = []
+    while stack:
+        current_module = stack.pop()
+        for _, attr in current_module.named_children():
+            if isinstance(attr, torch.nn.Module):
+                stack.append(attr)
+        ordered_modules.append(current_module)
+    return ordered_modules[::-1]

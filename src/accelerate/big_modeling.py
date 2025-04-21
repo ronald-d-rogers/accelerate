@@ -16,7 +16,7 @@ import logging
 import os
 from contextlib import contextmanager
 from functools import wraps
-from typing import Dict, List, Optional, Union
+from typing import Optional, Union
 
 import torch
 import torch.nn as nn
@@ -41,7 +41,7 @@ from .utils import (
     is_mlu_available,
     is_musa_available,
     is_npu_available,
-    is_torch_version,
+    is_sdaa_available,
     is_xpu_available,
     load_checkpoint_in_model,
     offload_state_dict,
@@ -114,8 +114,7 @@ def init_on_device(device: torch.device, include_buffers: bool = None):
     if include_buffers is None:
         include_buffers = parse_flag_from_env("ACCELERATE_INIT_INCLUDE_BUFFERS", False)
 
-    # TODO(shingjan): remove the torch version check once older versions are deprecated
-    if is_torch_version(">=", "2.0") and include_buffers:
+    if include_buffers:
         with device:
             yield
         return
@@ -172,8 +171,8 @@ def cpu_offload(
     model: nn.Module,
     execution_device: Optional[torch.device] = None,
     offload_buffers: bool = False,
-    state_dict: Optional[Dict[str, torch.Tensor]] = None,
-    preload_module_classes: Optional[List[str]] = None,
+    state_dict: Optional[dict[str, torch.Tensor]] = None,
+    preload_module_classes: Optional[list[str]] = None,
 ):
     """
     Activates full CPU offload for a model. As a result, all parameters of the model will be offloaded and only one
@@ -263,7 +262,7 @@ def disk_offload(
     offload_dir: Union[str, os.PathLike],
     execution_device: Optional[torch.device] = None,
     offload_buffers: bool = False,
-    preload_module_classes: Optional[List[str]] = None,
+    preload_module_classes: Optional[list[str]] = None,
 ):
     """
     Activates full disk offload for a model. As a result, all parameters of the model will be offloaded as
@@ -306,14 +305,14 @@ def disk_offload(
 
 def dispatch_model(
     model: nn.Module,
-    device_map: Dict[str, Union[str, int, torch.device]],
+    device_map: dict[str, Union[str, int, torch.device]],
     main_device: Optional[torch.device] = None,
-    state_dict: Optional[Dict[str, torch.Tensor]] = None,
+    state_dict: Optional[dict[str, torch.Tensor]] = None,
     offload_dir: Optional[Union[str, os.PathLike]] = None,
-    offload_index: Optional[Dict[str, str]] = None,
+    offload_index: Optional[dict[str, str]] = None,
     offload_buffers: bool = False,
-    skip_keys: Optional[Union[str, List[str]]] = None,
-    preload_module_classes: Optional[List[str]] = None,
+    skip_keys: Optional[Union[str, list[str]]] = None,
+    preload_module_classes: Optional[list[str]] = None,
     force_hooks: bool = False,
 ):
     """
@@ -468,6 +467,8 @@ def dispatch_model(
             model.npu = add_warning(model.npu, model)
         elif is_mlu_available():
             model.mlu = add_warning(model.mlu, model)
+        elif is_sdaa_available():
+            model.sdaa = add_warning(model.sdaa, model)
         elif is_musa_available():
             model.musa = add_warning(model.musa, model)
         elif is_xpu_available():
@@ -490,10 +491,10 @@ def dispatch_model(
             device = f"npu:{device}"
         elif is_mlu_available() and isinstance(device, int):
             device = f"mlu:{device}"
+        elif is_sdaa_available() and isinstance(device, int):
+            device = f"sdaa:{device}"
         elif is_musa_available() and isinstance(device, int):
             device = f"musa:{device}"
-        elif is_xpu_available() and isinstance(device, int):
-            device = f"xpu:{device}"
         if device != "disk":
             model.to(device)
         else:
@@ -508,17 +509,19 @@ def dispatch_model(
 def load_checkpoint_and_dispatch(
     model: nn.Module,
     checkpoint: Union[str, os.PathLike],
-    device_map: Optional[Union[str, Dict[str, Union[int, str, torch.device]]]] = None,
-    max_memory: Optional[Dict[Union[int, str], Union[int, str]]] = None,
-    no_split_module_classes: Optional[List[str]] = None,
+    device_map: Optional[Union[str, dict[str, Union[int, str, torch.device]]]] = None,
+    max_memory: Optional[dict[Union[int, str], Union[int, str]]] = None,
+    no_split_module_classes: Optional[list[str]] = None,
     offload_folder: Optional[Union[str, os.PathLike]] = None,
     offload_buffers: bool = False,
     dtype: Optional[Union[str, torch.dtype]] = None,
     offload_state_dict: Optional[bool] = None,
-    skip_keys: Optional[Union[str, List[str]]] = None,
-    preload_module_classes: Optional[List[str]] = None,
+    skip_keys: Optional[Union[str, list[str]]] = None,
+    preload_module_classes: Optional[list[str]] = None,
     force_hooks: bool = False,
     strict: bool = False,
+    full_state_dict: bool = True,
+    broadcast_from_rank0: bool = False,
 ):
     """
     Loads a (potentially sharded) checkpoint inside a model, potentially sending weights to a given device as they are
@@ -568,6 +571,12 @@ def load_checkpoint_and_dispatch(
         strict (`bool`, *optional*, defaults to `False`):
             Whether to strictly enforce that the keys in the checkpoint state_dict match the keys of the model's
             state_dict.
+        full_state_dict (`bool`, *optional*, defaults to `True`): if this is set to `True`, all the tensors in the
+            loaded state_dict will be gathered. No ShardedTensor and DTensor will be in the loaded state_dict.
+        broadcast_from_rank0 (`False`, *optional*, defaults to `False`): when the option is `True`, a distributed
+            `ProcessGroup` must be initialized. rank0 should receive a full state_dict and will broadcast the tensors
+            in the state_dict one by one to other ranks. Other ranks will receive the tensors and shard (if applicable)
+            according to the local shards in the model.
 
     Example:
 
@@ -593,8 +602,7 @@ def load_checkpoint_and_dispatch(
     """
     if isinstance(device_map, str) and device_map not in ["auto", "balanced", "balanced_low_0", "sequential"]:
         raise ValueError(
-            "If passing a string for `device_map`, please choose 'auto', 'balanced', 'balanced_low_0' or "
-            "'sequential'."
+            "If passing a string for `device_map`, please choose 'auto', 'balanced', 'balanced_low_0' or 'sequential'."
         )
     if isinstance(device_map, str):
         if device_map != "sequential":
@@ -623,6 +631,8 @@ def load_checkpoint_and_dispatch(
         offload_state_dict=offload_state_dict,
         offload_buffers=offload_buffers,
         strict=strict,
+        full_state_dict=full_state_dict,
+        broadcast_from_rank0=broadcast_from_rank0,
     )
     if device_map is None:
         return model
