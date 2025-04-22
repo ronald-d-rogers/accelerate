@@ -41,7 +41,7 @@ FSDP2_STATE_DICT_TYPE = ["SHARDED_STATE_DICT"]
 FSDP_PYTORCH_VERSION = (
     "2.1.0.a0+32f93b1"  # Technically should be 2.1.0, but MS-AMP uses this specific prerelease in their Docker image.
 )
-FSDP2_PYTORCH_VERSION = "2.5.1"
+FSDP2_PYTORCH_VERSION = "2.6.0"
 FSDP_MODEL_NAME = "pytorch_model_fsdp"
 DEEPSPEED_MULTINODE_LAUNCHERS = ["pdsh", "standard", "openmpi", "mvapich", "mpich", "nossh", "slurm"]
 TORCH_DYNAMO_MODES = ["default", "reduce-overhead", "max-autotune"]
@@ -49,7 +49,7 @@ ELASTIC_LOG_LINE_PREFIX_TEMPLATE_PYTORCH_VERSION = "2.2.0"
 XPU_PROFILING_AVAILABLE_PYTORCH_VERSION = "2.4.0"
 MITA_PROFILING_AVAILABLE_PYTORCH_VERSION = "2.1.0"
 BETA_TP_AVAILABLE_PYTORCH_VERSION = "2.3.0"
-BETA_TP_AVAILABLE_TRANSFORMERS_VERSION = "4.47.0"
+BETA_TP_AVAILABLE_TRANSFORMERS_VERSION = "4.52.0"
 
 STR_OPERATION_TO_FUNC = {">": op.gt, ">=": op.ge, "==": op.eq, "!=": op.ne, "<=": op.le, "<": op.lt}
 

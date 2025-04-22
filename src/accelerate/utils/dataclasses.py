@@ -33,6 +33,7 @@ import torch
 
 from .constants import (
     BETA_TP_AVAILABLE_PYTORCH_VERSION,
+    FSDP2_PYTORCH_VERSION,
     FSDP_AUTO_WRAP_POLICY,
     FSDP_BACKWARD_PREFETCH,
     FSDP_SHARDING_STRATEGY,
@@ -1120,6 +1121,14 @@ class DeepSpeedPlugin:
             "help": "Optimization level for MS-AMP (defaults to 'O1'). Only applicable if `enable_msamp` is True. Should be one of ['O1' or 'O2']."
         },
     )
+    sequence_parallel_size: int = field(
+        default=None,
+        metadata={"help": "Number of devices to split the sequence dimension over"},
+    )
+    data_parallel_size: int = field(
+        default=None,
+        metadata={"help": "Number of groups of `sequence_parallel_size` to create for sequence parallelism"},
+    )
 
     def __post_init__(self):
         from .deepspeed import HfDeepSpeedConfig
@@ -1183,11 +1192,14 @@ class DeepSpeedPlugin:
                 "offload_param_nvme_path": "zero_optimization.offload_param.nvme_path",
                 "offload_optimizer_nvme_path": "zero_optimization.offload_optimizer.nvme_path",
                 "zero3_save_16bit_model": "zero_optimization.stage3_gather_16bit_weights_on_model_save",
+                "sequence_parallel_size": "sequence_parallel_size",
+                "data_parallel_size": "data_parallel_size",
             }
             kwargs = {v: getattr(self, k) for k, v in plugin_to_config_mapping.items() if getattr(self, k) is not None}
             for key in kwargs.keys():
                 self.fill_match(key, **kwargs, must_match=False)
             self.hf_ds_config.set_stage_and_offload()
+            self.hf_ds_config.set_sequence_parallel()
 
             # filling the missing values in the class attributes from the DeepSpeed config
             # when using the DeepSpeed config file.
@@ -1217,6 +1229,10 @@ class DeepSpeedPlugin:
             }
             if self.gradient_clipping:
                 config["gradient_clipping"] = self.gradient_clipping
+            if self.sequence_parallel_size:
+                config["sequence_parallel_size"] = self.sequence_parallel_size
+            if self.data_parallel_size:
+                config["data_parallel_size"] = self.data_parallel_size
             self.hf_ds_config = HfDeepSpeedConfig(config)
 
         self.deepspeed_config = self.hf_ds_config.config
@@ -1353,6 +1369,9 @@ class DeepSpeedPlugin:
 
     def is_zero3_init_enabled(self):
         return self.zero3_init_flag
+
+    def is_sequence_parallel_enabled(self):
+        return self.sequence_parallel_size is not None and self.sequence_parallel_size > 1
 
     @contextmanager
     def zero3_init_context_manager(self, enable=False):
@@ -1672,6 +1691,10 @@ class FullyShardedDataParallelPlugin:
         # Strategy: By default we should always assume that values are passed in, else we check the environment variables
         if self.fsdp_version is None:
             self.fsdp_version = int(os.environ.get(env_prefix + "VERSION", "1"))
+
+        if self.fsdp_version == 2:
+            if not is_torch_version(">=", FSDP2_PYTORCH_VERSION):
+                raise ImportError(f"FSDP2 requires PyTorch >= {FSDP2_PYTORCH_VERSION}")
 
         if self.sharding_strategy is not None:
             # We cannot properly detect all of the cases, as by default `args.fsdp_sharding_strategy` is set to `fully_shard`
@@ -2028,9 +2051,11 @@ class TorchTensorParallelPlugin:
     torch_device_mesh: Optional["torch.distributed.DeviceMesh"] = field(default=None)
 
     def __post_init__(self):
-        self.tp_size = self.tp_size if os.environ.get("TP_SIZE", "1") == "1" else int(os.environ.get("TP_SIZE", "1"))
-        if self.tp_size == 1:
-            raise ValueError("Provide TP degree > 1.")
+        if not isinstance(self.tp_size, int):
+            raise ValueError(f"`tp_size` set to {self.tp_size}, please set to an `int`.")
+
+        if self.tp_size <= 1:
+            raise ValueError("`tp_size` must be greater than 1.")
 
         if is_torch_version("<", BETA_TP_AVAILABLE_PYTORCH_VERSION):
             raise ValueError(
@@ -2046,6 +2071,8 @@ class TorchTensorParallelPlugin:
 
         mesh_dim_name = "tp"
 
+        # device mesh is not used for model sharding
+        # it is only used for preparing data loader
         self.torch_device_mesh = init_device_mesh(device, (self.tp_size,), mesh_dim_names=(mesh_dim_name,))
 
 
